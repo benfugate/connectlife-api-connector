@@ -167,11 +167,18 @@ class ConnectlifeApiService
         return Cache::remember($token, 5, function () use ($token) {
             $requestData = $this->getCommonRequestData() + ['accessToken' => $token];
 
-            $devices = $this->decodeJsonResponse(
+            $response = $this->decodeJsonResponse(
                 $this->httpClient->get(self::BASE_URL . '/clife-svc/pu/get_device_status_list', [
                     RequestOptions::QUERY => $requestData + ['sign' => $this->getSignature($requestData)]
                 ])
-            )['response']['deviceList'];
+            )['response'];
+
+            if (!isset($response['deviceList'])) {
+                Log::warning('ConnectLife API error: missing deviceList', $response);
+                return [];
+            }
+
+            $devices = $response['deviceList'];
 
             foreach ($devices as $k => $v) {
                 try {
