@@ -1,4 +1,4 @@
-# Connectlife API proxy / MQTT Home Assistant integration
+# ConnectLife API / MQTT integration
 
 [aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg
 [amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg
@@ -11,139 +11,207 @@
 ![armv7-shield]
 ![i386-shield]
 
-The add-on utilizes the API acquired through reverse engineering from the 
-[Connectlife mobile app](https://en.connectlife.io)
-to control AC devices and 
-integrates seamlessly with Home Assistant through
-[MQTT](https://www.home-assistant.io/integrations/climate.mqtt/), leveraging its
-[discovery feature](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery).
+Polls the ConnectLife cloud API (reverse-engineered from the
+[ConnectLife mobile app](https://en.connectlife.io)) and bridges device
+state to an MQTT broker. Supports Home Assistant auto-discovery and
+includes a native Hubitat driver.
 
-The reason for the add-on was the lack of official support for device integration.
+Originally forked from [bilan/connectlife-api-connector](https://github.com/bilan/connectlife-api-connector).
 
-I welcome pull requests, bug reports, and feature requests. Please feel free to submit them in the
-[issues section](https://github.com/Bilan/connectlife-api-connector/issues).
+---
 
-## Install in Home Assistant with Supervisor
+## How it works
 
-[![ha_badge](https://img.shields.io/badge/Home%20Assistant-Add%20On-blue.svg)](https://www.home-assistant.io/)
-
-1. Make sure your Connectlife appliances are online.
-2. In Supervisor, navidate to the Add-on Store.
-3. From the overflow menu, select "Repositories".
-4. Add `https://github.com/bilan/home-assistant-addons/`.
-5. Wait for Add-on to appear or click "Reload" in the same overflow menu.
-6. Install / build thhe add-on.
-7. Turn on the add-on watchdog - Connectlife API is not stable and sometimes times out.
-8. In the Configuration section, fill in the necessary fields. If you leave the fields blank,
-the add-on will attempt to fetch MQTT credentials from the Supervisor API.
-
-## Run as independent docker container without HA/Supervisor
-
-#### Build image
-```bash
-docker build . --build-arg='BUILD_FROM=alpine:3.20' -t ha-connectlife-addon
+```
+Hisense/ConnectLife device
+         │  WiFi
+  ConnectLife Cloud API
+         │
+  connectlife-api-connector  (Docker container)
+         │  MQTT
+      MQTT broker
+         │
+  Home Assistant  /  Hubitat
 ```
 
-#### Run HTTP API and MQTT client both
+The container polls the ConnectLife API every 60 seconds and publishes
+device state as **retained** MQTT messages, so any subscriber receives
+current state immediately on connect.
+
+---
+
+## Run as standalone Docker container
+
+This fork defaults to MQTT-only mode — no Home Assistant Supervisor required.
+
+#### Pull from Docker Hub
 ```bash
-docker run -it \
--p 8000:8000 \
--e CONNECTLIFE_LOGIN=connectlife-login-email \
--e CONNECTLIFE_PASSWORD=your-password \
--e LOG_LEVEL=info \
--e MQTT_HOST=host \
--e MQTT_USER=login  \
--e MQTT_PASSWORD=mqtt-pass  \
--e MQTT_PORT=1883 \
--e MQTT_SSL=false \
--e DEVICES_CONFIG='{"117":{"t_work_mode":["fan only","heat","cool","dry","auto"],"t_fan_speed":{"0":"auto","5":"super low","6":"low","7":"medium","8":"high","9":"super high"},"t_swing_direction":["straight","right","both sides","swing","left"],"t_swing_angle":{"0":"swing","2":"bottom 1\/6 ","3":"bottom 2\/6","4":"bottom 3\/6","5":"top 4\/6","6":"top 5\/6","7":"top 6\/6"}}}' \
-ha-connectlife-addon /bin/ash -c '/usr/bin/supervisord -c /home/app/docker-files/supervisord.conf'
+docker pull benfugate/connectlife-api-connector:latest
 ```
 
-#### HTTP API only
+#### Run (MQTT mode)
 ```bash
-docker run -it \
--p 8000:8000 \
--e CONNECTLIFE_LOGIN=connectlife-login-email \
--e CONNECTLIFE_PASSWORD=your-password \
--e LOG_LEVEL=info \
-ha-connectlife-addon /bin/ash -c 'php artisan serve --port=8000 --host=0.0.0.0'
+docker run -d --restart unless-stopped \
+  -e CONNECTLIFE_LOGIN=your@email.com \
+  -e CONNECTLIFE_PASSWORD=your-password \
+  -e MQTT_HOST=your-mqtt-host \
+  -e MQTT_PORT=1883 \
+  -e MQTT_SSL=false \
+  -e LOG_LEVEL=info \
+  benfugate/connectlife-api-connector:latest
 ```
 
-#### MQTT client only
+#### Build locally
 ```bash
-docker run -it \
--e CONNECTLIFE_LOGIN=connectlife-login-email \
--e CONNECTLIFE_PASSWORD=your-password \
--e LOG_LEVEL=info \
--e MQTT_HOST=host \
--e MQTT_USER=login  \
--e MQTT_PASSWORD=mqtt-pass  \
--e MQTT_PORT=1883 \
--e MQTT_SSL=false \
--e DEVICES_CONFIG='{"117":{"t_work_mode":["fan only","heat","cool","dry","auto"],"t_fan_speed":{"0":"auto","5":"super low","6":"low","7":"medium","8":"high","9":"super high"},"t_swing_direction":["straight","right","both sides","swing","left"],"t_swing_angle":{"0":"swing","2":"bottom 1\/6 ","3":"bottom 2\/6","4":"bottom 3\/6","5":"top 4\/6","6":"top 5\/6","7":"top 6\/6"}}}' \
-ha-connectlife-addon /bin/ash -c 'php artisan app:mqtt-loop'
+docker build . --build-arg='BUILD_FROM=alpine:3.20' -t connectlife-api-connector
 ```
 
-## API endpoints
+#### Environment variables
 
-- `GET /api/devices` 
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CONNECTLIFE_LOGIN` | Yes | ConnectLife account email |
+| `CONNECTLIFE_PASSWORD` | Yes | ConnectLife account password |
+| `MQTT_HOST` | Yes | MQTT broker hostname or IP |
+| `MQTT_PORT` | No | MQTT broker port (default: 1883) |
+| `MQTT_USER` | No | MQTT username |
+| `MQTT_PASSWORD` | No | MQTT password |
+| `MQTT_SSL` | No | Enable TLS (`true`/`false`, default: false) |
+| `LOG_LEVEL` | No | `debug`, `info`, `warning` (default: info) |
+| `DEVICES_CONFIG` | No | JSON device feature overrides (see below) |
+| `BEEPING` | No | AC beep on command (`0`/`1`, default: 0) |
 
-    example: `curl -v http://0.0.0.0:8000/api/devices`
+> **Note:** ConnectLife accounts using Google/social login require a
+> native password to be set. Use "Forgot Password" on the login screen
+> to add one.
 
-- `POST /api/devices/{DEVICE_ID}` 
+#### DEVICES_CONFIG
 
-    example: `curl -v http://0.0.0.0:8000/api/devices/pu12345 -d '{"t_temp":32}' -H "Content-Type: application/json"`
+Optional per-device mode/fan/swing overrides keyed by `deviceFeatureCode`.
+If omitted, the default split AC config is used (feature code 117).
 
-#### Air Conditioner properties
+```bash
+-e DEVICES_CONFIG='{"117":{"t_work_mode":["fan only","heat","cool","dry","auto"],"t_fan_speed":{"0":"auto","5":"super low","6":"low","7":"medium","8":"high","9":"super high"}}}'
+```
 
-> Values for my personal split air conditioner (`deviceFeatureCode` 117, `deviceTypeCode` 009)
+---
 
-| Property | Description | Type | Example |
-|----------|-------------|------|---------|
-|   t_power | on / off | uint   | 0 - off, 1 - on |
-|   t_temp  |   temperature |   uint|    21  |
-|   t_beep  |   buzzer  |   uint |   0, 1    |
-|   t_work_mode |  mode | uint | 3 
-|   t_tms   | ?
-|   t_swing_direction   |   horizontal swing
-|   t_swing_angle   |  vertical swing
-|   t_temp_type | temp unit |  string  | "0" - fahr, "1" - celsius
-|   t_fan_speed | fan speed | uint | 0 |
-|   t_fan_mute | silence mode | uint | 0, 1
-|   t_super | fast mode | uint | 0,1
-|   t_eco   |   eco mode | uint | 0,1
+## MQTT topics
 
+All topics are prefixed with the device `puid` (e.g. `pu000068abc.../ac/...`).
+State topics are published as **retained messages**.
 
-`t_work_mode`
-- 0 - fan only
-- 1 - heat
-- 2 - cool
-- 3 - dry
-- 4 - auto
+| Topic | Direction | Payload |
+|-------|-----------|---------|
+| `{id}/ac/mode/get` | connector → broker | `off`, `cool`, `heat`, `auto`, `fan_only`, `dry` |
+| `{id}/ac/temperature/get` | connector → broker | integer (target temp) |
+| `{id}/ac/current-temperature/get` | connector → broker | integer (room temp) |
+| `{id}/ac/fan/get` | connector → broker | `auto`, `low`, `medium`, `high`, etc. |
+| `{id}/ac/attributes/get` | connector → broker | JSON of raw device statusList |
+| `{id}/ac/mode/set` | broker → connector | same values as mode/get |
+| `{id}/ac/temperature/set` | broker → connector | integer string |
+| `{id}/ac/fan/set` | broker → connector | fan speed string |
+| `{id}/ac/power/set` | broker → connector | `1` (on) or `0` (off) |
 
-`t_fan_speed`
-- 0 - auto
-- 5 - super low
-- 6 - low
-- 7 - medium
-- 8 - high
-- 9 - super high
+To find your device `puid`, check the container logs on startup or run
+the HTTP API (see below) and look for the `puid` field.
 
-`t_swing_direction`
-- 0 - straight
-- 1 - right
-- 2 - both sides
-- 3 - swing
-- 4 - left
+---
 
-`t_swing_angle`
-- 0 - swing
-- 2 -> 7 - from bottom to top 
+## Hubitat integration
+
+A native Hubitat driver is included at [`hubitat/ConnectLifeAC.groovy`](hubitat/ConnectLifeAC.groovy).
+
+### Setup
+
+1. In Hubitat, go to **Drivers Code → New Driver**, paste the contents of
+   `hubitat/ConnectLifeAC.groovy`, and click **Save**.
+2. Go to **Devices → Add Device → Virtual**, select driver **"ConnectLife AC"**.
+3. Open the device and fill in **Preferences**:
+
+| Preference | Value |
+|------------|-------|
+| MQTT Broker URL | `tcp://your-broker-host:1883` |
+| MQTT Client ID | Any unique string (e.g. `hubitat-connectlife`) |
+| MQTT Username | Leave blank if no auth |
+| MQTT Password | Leave blank if no auth |
+| ConnectLife Device ID | Your device `puid` from the container logs |
+| Temperature Unit | `F` or `C` |
+
+4. Click **Save Preferences**. The driver connects, subscribes, and
+   immediately receives current state from retained messages.
+
+### Capabilities
+
+- `Thermostat` — mode, setpoint, operating state
+- `ThermostatCoolingSetpoint`
+- `ThermostatMode` — `off`, `cool`, `auto`, `fan_only`, `dry`
+- `ThermostatFanMode` — `auto`, `super_low`, `low`, `medium`, `high`, `super_high`
+- `TemperatureMeasurement` — current room temperature
+- `Refresh` — re-subscribes to pull latest retained state immediately
+
+---
+
+## Home Assistant integration
+
+This image publishes Home Assistant MQTT discovery messages automatically.
+Add it via the [bilan/home-assistant-addons](https://github.com/bilan/home-assistant-addons/)
+repository in HA Supervisor, or run standalone and point it at your HA MQTT broker.
+
+---
+
+## HTTP API
+
+Run with `-p 8000:8000` and `DISABLE_HTTP_API` unset (or `false`) to also
+expose a REST API.
+
+- `GET /api/devices` — list all devices and current status
+
+  ```bash
+  curl http://your-host:8000/api/devices
+  ```
+
+- `POST /api/devices/{puid}` — update device properties directly
+
+  ```bash
+  curl http://your-host:8000/api/devices/pu12345 \
+    -d '{"t_temp":72}' \
+    -H "Content-Type: application/json"
+  ```
+
+---
+
+## Air conditioner properties
+
+> Values documented for split AC (`deviceFeatureCode` 117, `deviceTypeCode` 009).
+> Portable AC units may differ.
+
+| Property | Description | Type | Values |
+|----------|-------------|------|--------|
+| `t_power` | Power | uint | `0` off, `1` on |
+| `t_temp` | Target temperature | uint | e.g. `72` |
+| `t_temp_type` | Temperature unit | string | `"0"` Fahrenheit, `"1"` Celsius |
+| `t_work_mode` | Mode | uint | see below |
+| `t_fan_speed` | Fan speed | uint | see below |
+| `t_swing_direction` | Horizontal swing | uint | see below |
+| `t_swing_angle` | Vertical swing | uint | see below |
+| `t_beep` | Beep on command | uint | `0`, `1` |
+| `t_fan_mute` | Silence mode | uint | `0`, `1` |
+| `t_super` | Fast mode | uint | `0`, `1` |
+| `t_eco` | Eco mode | uint | `0`, `1` |
+
+`t_work_mode`: `0` fan only · `1` heat · `2` cool · `3` dry · `4` auto
+
+`t_fan_speed`: `0` auto · `5` super low · `6` low · `7` medium · `8` high · `9` super high
+
+`t_swing_direction`: `0` straight · `1` right · `2` both sides · `3` swing · `4` left
+
+`t_swing_angle`: `0` swing · `2`–`7` bottom to top
+
+---
 
 ## Useful links
 
--   https://api.connectlife.io/swagger/index.html
--   https://developers.home-assistant.io/docs/add-ons/testing
--   https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
--   https://www.home-assistant.io/integrations/climate.mqtt/
+- https://api.connectlife.io/swagger/index.html
+- https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
+- https://www.home-assistant.io/integrations/climate.mqtt/
