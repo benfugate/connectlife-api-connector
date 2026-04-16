@@ -35,4 +35,4 @@ WORKDIR /home/app
 RUN composer install --no-interaction --no-dev -vvv
 RUN chmod a+x run.sh
 
-CMD [ "/home/app/run.sh" ]
+CMD [ "/bin/ash", "-c", "php artisan app:mqtt-loop" ]

@@ -15,8 +15,12 @@ class MqttService
         private ConnectlifeApiService $connectlifeApiService
     )
     {
-        foreach ($this->connectlifeApiService->getOnlineAcDevices() as $device) {
-            $this->acDevices[$device->id] = $device;
+        try {
+            foreach ($this->connectlifeApiService->getOnlineAcDevices() as $device) {
+                $this->acDevices[$device->id] = $device;
+            }
+        } catch (\Exception $e) {
+            Log::warning("Failed to fetch devices on startup, will retry: " . $e->getMessage());
         }
     }
 
@@ -96,7 +100,13 @@ class MqttService
         foreach ($this->connectlifeApiService->getOnlineAcDevices() as $device) {
             Log::info("Updating HA device state", [$device->id]);
 
+            $isNewDevice = !isset($this->acDevices[$device->id]);
             $this->acDevices[$device->id] = $device;
+
+            if ($isNewDevice) {
+                Log::info("New device discovered, setting up subscriptions", [$device->id]);
+                $this->setupDeviceSubscribes($device->id);
+            }
 
             $this->client->publish("$device->id/ac/mode/get", $device->mode);
             $this->client->publish("$device->id/ac/temperature/get", $device->temperature);
