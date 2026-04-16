@@ -108,13 +108,13 @@ class MqttService
                 $this->setupDeviceSubscribes($device->id);
             }
 
-            $this->client->publish("$device->id/ac/mode/get", $device->mode);
-            $this->client->publish("$device->id/ac/temperature/get", $device->temperature);
-            $this->client->publish("$device->id/ac/current-temperature/get", $device->currentTemperature);
-            $this->client->publish("$device->id/ac/attributes/get", json_encode($device->raw['statusList']));
+            $this->client->publish("$device->id/ac/mode/get", $device->mode, 0, true);
+            $this->client->publish("$device->id/ac/temperature/get", (string)$device->temperature, 0, true);
+            $this->client->publish("$device->id/ac/current-temperature/get", (string)$device->currentTemperature, 0, true);
+            $this->client->publish("$device->id/ac/attributes/get", json_encode($device->raw['statusList']), 0, true);
 
             if (isset($device->fanSpeed)) {
-                $this->client->publish("$device->id/ac/fan/get", $device->fanSpeed);
+                $this->client->publish("$device->id/ac/fan/get", $device->fanSpeed, 0, true);
             }
 
             if (isset($device->swing)) {
