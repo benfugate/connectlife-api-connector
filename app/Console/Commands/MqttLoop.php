@@ -40,7 +40,7 @@ class MqttLoop extends Command
             if (microtime(true) - $lastUpdatedState >= 60) {
                 try {
                     $mqttService->updateDevicesState();
-                } catch (TransferException $e) {
+                } catch (TransferException | \Exception $e) {
                     $this->error($e->getMessage());
                 }
                 $lastUpdatedState = microtime(true);
