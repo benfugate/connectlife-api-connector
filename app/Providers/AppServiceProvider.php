@@ -24,7 +24,10 @@ class AppServiceProvider extends ServiceProvider
             $settings = (new ConnectionSettings)
                 ->setUsername(config('mqtt.user'))
                 ->setPassword(config('mqtt.password'))
-                ->setUseTls(config('mqtt.ssl'));
+                ->setUseTls(config('mqtt.ssl'))
+                ->setReconnectAutomatically(true)
+                ->setMaxReconnectAttempts(PHP_INT_MAX)
+                ->setDelayBetweenReconnectAttempts(5000);
 
             $client->connect($settings);
 

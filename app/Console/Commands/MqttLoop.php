@@ -46,7 +46,11 @@ class MqttLoop extends Command
                 $lastUpdatedState = microtime(true);
             }
 
-            $mqttService->getMqttClient()->loopOnce($loopStartedAt, true);
+            try {
+                $mqttService->getMqttClient()->loopOnce($loopStartedAt, true);
+            } catch (\Exception $e) {
+                $this->error($e->getMessage());
+            }
         }
 
         $mqttService->getMqttClient()->disconnect();
