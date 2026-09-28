@@ -61,14 +61,16 @@ class MqttService
             $topic = "$id/ac/$option/set";
             $this->client->subscribe($topic, function (string $topic, string $message, bool $retained) {
                 Log::info("Mqtt: received a $retained on [$topic] {$message}");
-                $this->client->publish(str_replace('/set', '/get', $topic), $message);
 
-                $this->reactToMessageOnTopic($topic, $message);
+                // Only echo the new state once the cloud accepted it; otherwise the next poll reports the truth.
+                if ($this->reactToMessageOnTopic($topic, $message)) {
+                    $this->client->publish(str_replace('/set', '/get', $topic), $message);
+                }
             });
         }
     }
 
-    private function reactToMessageOnTopic(string $topic, string $message): void
+    private function reactToMessageOnTopic(string $topic, string $message): bool
     {
         $topic = explode('/', $topic);
         $acDevice = $this->getAcDevice($topic[0]);
@@ -82,7 +84,7 @@ class MqttService
             'swing' => $acDevice->swing = $message
         };
 
-        $this->updateAcDevice($acDevice);
+        return ($this->updateAcDevice($acDevice)['resultCode'] ?? 1) === 0;
     }
 
     private function getAcDevice(string $deviceId): AcDevice
@@ -90,9 +92,9 @@ class MqttService
         return $this->acDevices[$deviceId];
     }
 
-    public function updateAcDevice(AcDevice $acDevice)
+    public function updateAcDevice(AcDevice $acDevice): array
     {
-        $this->connectlifeApiService->updateDevice($acDevice->id, $acDevice->toConnectLifeApiPropertiesArray());
+        return $this->connectlifeApiService->updateDevice($acDevice->id, $acDevice->toConnectLifeApiPropertiesArray());
     }
 
     public function updateDevicesState()

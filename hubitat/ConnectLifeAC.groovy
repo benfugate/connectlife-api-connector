@@ -96,18 +96,36 @@ def updated() {
 }
 
 def initialize() {
+    unschedule()
+    // Watchdog: a dropped connection whose reconnect fails is otherwise never retried
+    runEvery1Minute("checkConnection")
+    connectMqtt()
+}
+
+def connectMqtt() {
     log.info "${device.displayName}: connecting to ${settings.mqttBroker}"
     try { interfaces.mqtt.disconnect() } catch (e) { /* not connected yet */ }
     pauseExecution(1000)
-    interfaces.mqtt.connect(
-        settings.mqttBroker,
-        settings.mqttClientId,
-        settings.mqttUser ?: null,
-        settings.mqttPass ?: null,
-        lastWillTopic:   "${settings.deviceId}/ac/hubitat/status",
-        lastWillMessage: "offline",
-        lastWillRetain:  true
-    )
+    try {
+        interfaces.mqtt.connect(
+            settings.mqttBroker,
+            settings.mqttClientId,
+            settings.mqttUser ?: null,
+            settings.mqttPass ?: null,
+            lastWillTopic:   "${settings.deviceId}/ac/hubitat/status",
+            lastWillMessage: "offline",
+            lastWillRetain:  true
+        )
+    } catch (e) {
+        log.error "${device.displayName}: MQTT connect failed (${e.message}), retrying within 1 min"
+    }
+}
+
+def checkConnection() {
+    if (!interfaces.mqtt.isConnected()) {
+        log.warn "${device.displayName}: MQTT disconnected, reconnecting"
+        connectMqtt()
+    }
 }
 
 def reconnect() {
@@ -115,6 +133,11 @@ def reconnect() {
 }
 
 def refresh() {
+    if (!interfaces.mqtt.isConnected()) {
+        log.warn "${device.displayName}: refresh while MQTT disconnected, reconnecting"
+        connectMqtt()   // resubscribes on "Connection succeeded"
+        return
+    }
     if (logEnable) log.debug "${device.displayName}: refresh — resubscribing to pull retained state"
     subscribeTopics()
 }
@@ -158,7 +181,7 @@ def mqttClientStatus(String message) {
         subscribeTopics()
     } else if (message.startsWith("Error")) {
         log.error "${device.displayName}: MQTT error, retrying in 30s"
-        runIn(30, initialize)
+        runIn(30, "checkConnection")
     }
 }
 
@@ -200,8 +223,16 @@ def fanCirculate()  { setThermostatFanMode("medium") }
 
 private publish(String property, String value) {
     def topic = "${settings.deviceId}/ac/${property}/set"
+    if (!interfaces.mqtt.isConnected()) {
+        log.warn "${device.displayName}: MQTT disconnected, reconnecting before sending ${property}=${value}"
+        connectMqtt()
+    }
     if (logEnable) log.debug "${device.displayName}: MQTT → [${topic}] ${value}"
-    interfaces.mqtt.publish(topic, value)
+    try {
+        interfaces.mqtt.publish(topic, value)
+    } catch (e) {
+        log.error "${device.displayName}: failed to send ${property}=${value} (${e.message})"
+    }
 }
 
 private String operatingStateFor(String mode) {

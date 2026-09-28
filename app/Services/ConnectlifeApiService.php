@@ -14,6 +14,10 @@ class ConnectlifeApiService
 {
     private const BASE_URL = 'https://clife-eu-gateway.hijuconn.com';
 
+    // The gateway intermittently rejects a valid request with this code; a fresh randStr usually succeeds.
+    private const RAND_STR_CHECK_FAIL = 101005;
+    private const MAX_UPDATE_ATTEMPTS = 3;
+
     public function __construct(private Client $httpClient)
     {
         $this->httpClient = new Client([
@@ -32,17 +36,26 @@ class ConnectlifeApiService
 
         Log::info('ConnectLife: updating device.', $data);
 
-        $requestData = $this->getCommonRequestData() + $data + ['accessToken' => $this->getAccessToken()];
+        for ($attempt = 1; ; $attempt++) {
+            // Token first: a login refresh takes seconds and would otherwise stale the request timestamp.
+            $accessToken = $this->getAccessToken();
+            $requestData = $this->getCommonRequestData() + $data + ['accessToken' => $accessToken];
 
-        $result = $this->decodeJsonResponse(
-            $this->httpClient->request('POST', self::BASE_URL . '/device/pu/property/set', [
-                RequestOptions::JSON => $requestData + ['sign' => $this->getSignature($requestData)]
-            ])
-        )['response'];
-        
-        Log::info('ConnectLife: updating device result.', $result);
+            $result = $this->decodeJsonResponse(
+                $this->httpClient->request('POST', self::BASE_URL . '/device/pu/property/set', [
+                    RequestOptions::JSON => $requestData + ['sign' => $this->getSignature($requestData)]
+                ])
+            )['response'];
 
-        return $result;
+            Log::info('ConnectLife: updating device result.', $result);
+
+            if (($result['errorCode'] ?? null) !== self::RAND_STR_CHECK_FAIL || $attempt >= self::MAX_UPDATE_ATTEMPTS) {
+                return $result;
+            }
+
+            Log::warning("ConnectLife: randStr check fail, retrying ($attempt/" . self::MAX_UPDATE_ATTEMPTS . ')');
+            usleep(500_000);
+        }
     }
 
     private function decodeJsonResponse(ResponseInterface $response)
