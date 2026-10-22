@@ -63,7 +63,7 @@ docker run -d --restart unless-stopped \
 
 #### Build locally
 ```bash
-docker build . --build-arg='BUILD_FROM=alpine:3.20' -t connectlife-api-connector
+docker build . -t connectlife-api-connector
 ```
 
 #### Environment variables
